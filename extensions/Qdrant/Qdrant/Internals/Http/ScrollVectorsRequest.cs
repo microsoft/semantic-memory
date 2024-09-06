@@ -1,9 +1,12 @@
 ﻿// Copyright (c) Microsoft. All rights reserved.
 
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Net.Http;
 using System.Text.Json.Serialization;
+using Microsoft.KernelMemory.MemoryDb.Qdrant.Internals;
+using static Microsoft.KernelMemory.MemoryDb.Qdrant.Client.Http.Filter;
 
 namespace Microsoft.KernelMemory.MemoryDb.Qdrant.Client.Http;
 
@@ -38,42 +41,64 @@ internal sealed class ScrollVectorsRequest
         return this;
     }
 
-    public ScrollVectorsRequest HavingAllTags(IEnumerable<string>? tags)
+    public ScrollVectorsRequest HavingAllTags(IEnumerable<TagFilter>? tagFilters)
     {
-        if (tags == null) { return this; }
+        if (tagFilters == null) { return this; }
 
-        foreach (var tag in tags)
+        foreach (var tagFilter in tagFilters)
         {
-            if (!string.IsNullOrEmpty(tag))
+            if (!string.IsNullOrEmpty(tagFilter.Tag))
             {
-                this.Filters.AndValue(QdrantConstants.PayloadTagsField, tag);
+                if (tagFilter.FilterType == TagFilterType.NotEqual)
+                {
+                    this.Filters.And(new MustNotClause(QdrantConstants.PayloadTagsField, tagFilter.Tag));
+                }
+                else if (tagFilter.FilterType == TagFilterType.Equal)
+                {
+                    this.Filters.AndValue(QdrantConstants.PayloadTagsField, tagFilter.Tag);
+                }
+                else
+                {
+                    throw new NotSupportedException($"Filter type {tagFilter.FilterType} is not supported in QDrant Memory");
+                }
             }
         }
 
         return this;
     }
 
-    public ScrollVectorsRequest HavingSomeTags(IEnumerable<IEnumerable<string>?>? tagGroups)
+    public ScrollVectorsRequest HavingSomeTags(IEnumerable<IEnumerable<TagFilter>>? tagFiltersGroups)
     {
-        if (tagGroups == null) { return this; }
+        if (tagFiltersGroups == null) { return this; }
 
-        var list = tagGroups.ToList();
+        var list = tagFiltersGroups.ToList();
         if (list.Count < 2)
         {
             return this.HavingAllTags(list.FirstOrDefault());
         }
 
         var orFilter = new Filter.OrClause();
-        foreach (var tags in list)
+        foreach (var tagFilters in list)
         {
-            if (tags == null) { continue; }
+            if (tagFilters == null) { continue; }
 
             var andFilter = new Filter.AndClause();
-            foreach (var tag in tags)
+            foreach (var tagFilter in tagFilters)
             {
-                if (!string.IsNullOrEmpty(tag))
+                if (!string.IsNullOrEmpty(tagFilter.Tag))
                 {
-                    andFilter.AndValue(QdrantConstants.PayloadTagsField, tag);
+                    if (tagFilter.FilterType == TagFilterType.NotEqual)
+                    {
+                        andFilter.And(new MustNotClause(QdrantConstants.PayloadTagsField, tagFilter.Tag));
+                    }
+                    else if (tagFilter.FilterType == TagFilterType.Equal)
+                    {
+                        andFilter.AndValue(QdrantConstants.PayloadTagsField, tagFilter.Tag);
+                    }
+                    else
+                    {
+                        throw new NotSupportedException($"Filter type {tagFilter.FilterType} is not supported in QDrant Memory");
+                    }
                 }
             }
 

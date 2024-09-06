@@ -306,16 +306,8 @@ public class ElasticsearchMemory : IMemoryDb
         QueryDescriptor<ElasticsearchMemoryRecord> qd,
         ICollection<MemoryFilter>? filters = null)
     {
-        if ((filters == null) || (filters.Count == 0))
-        {
-            qd.MatchAll();
-            return qd;
-        }
-
-        filters = filters.Where(f => f.Keys.Count > 0)
-            .ToList(); // Remove empty filters
-
-        if (filters.Count == 0)
+        var hasOneNotEmptyFilter = filters != null && filters.Any(f => !f.IsEmpty());
+        if (!hasOneNotEmptyFilter)
         {
             qd.MatchAll();
             return qd;
@@ -323,15 +315,15 @@ public class ElasticsearchMemory : IMemoryDb
 
         List<Query> super = new();
 
-        foreach (MemoryFilter filter in filters)
+        foreach (MemoryFilter filter in filters!)
         {
             List<Query> thisMust = new();
 
             // Each filter is a list of key/value pairs.
-            foreach (var pair in filter.Pairs)
+            foreach (var baseFilter in filter.GetFilters())
             {
-                Query newTagQuery = new TermQuery(ElasticsearchMemoryRecord.TagsName) { Value = pair.Key };
-                Query termQuery = new TermQuery(ElasticsearchMemoryRecord.TagsValue) { Value = pair.Value ?? string.Empty };
+                Query newTagQuery = new TermQuery(ElasticsearchMemoryRecord.TagsName) { Value = baseFilter.Key };
+                Query termQuery = new TermQuery(ElasticsearchMemoryRecord.TagsValue) { Value = baseFilter.Value ?? string.Empty };
 
                 newTagQuery &= termQuery;
 
@@ -339,7 +331,20 @@ public class ElasticsearchMemory : IMemoryDb
                 nestedQd.Path = ElasticsearchMemoryRecord.TagsField;
                 nestedQd.Query = newTagQuery;
 
-                thisMust.Add(nestedQd);
+                if (baseFilter is EqualFilter eq)
+                {
+                    thisMust.Add(nestedQd);
+                }
+                else if (baseFilter is NotEqualFilter neq)
+                {
+                    var notQuery = new BoolQuery();
+                    notQuery.MustNot = [nestedQd];
+                    thisMust.Add(notQuery);
+                }
+                else
+                {
+                    throw new ElasticsearchException($"Filter type {baseFilter.GetType().Name} is not supported.");
+                }
             }
 
             var filterQuery = new BoolQuery();

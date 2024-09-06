@@ -1,4 +1,4 @@
-// Copyright (c) Microsoft. All rights reserved.
+﻿// Copyright (c) Microsoft. All rights reserved.
 
 using Microsoft.KernelMemory;
 using Microsoft.KernelMemory.MemoryDb.AzureAISearch;
@@ -225,7 +225,13 @@ public class AzureAISearchFilteringTest : BaseUnitTestCase
 
         // Assert
         Console.WriteLine($"Result: {result}");
-        Assert.Equal("(tags/any(s: s eq 'color:blue') and tags/any(s: s eq 'color:blue'))", result);
+
+        // Note: Before introducing Not filter the test expected the result
+        // (tags/any(s: s eq 'color:blue') and tags/any(s: s eq 'color:blue'))
+        // in my opinion it is better to have a more coincise result because the
+        // previous result contains two identical conditions with an and it is
+        // better to have a single condition.
+        Assert.Equal("(tags/any(s: s eq 'color:blue'))", result);
     }
 
     [Fact]

@@ -15,18 +15,42 @@ public class DefaultTests : BaseFunctionalTestCase
 
     public DefaultTests(IConfiguration cfg, ITestOutputHelper output) : base(cfg, output)
     {
-        Assert.False(string.IsNullOrEmpty(this.OpenAiConfig.APIKey));
-
         this._esConfig = cfg.GetSection("KernelMemory:Services:Elasticsearch").Get<ElasticsearchConfig>()!;
 
-        this._memory = new KernelMemoryBuilder()
-            .With(new KernelMemoryConfig { DefaultIndexName = "default4tests" })
-            .WithSearchClientConfig(new SearchClientConfig { EmptyAnswer = NotFound })
-            .WithOpenAI(this.OpenAiConfig)
-            // .WithAzureOpenAITextGeneration(this.AzureOpenAITextConfiguration)
-            // .WithAzureOpenAITextEmbeddingGeneration(this.AzureOpenAIEmbeddingConfiguration)
-            .WithElasticsearchMemoryDb(this._esConfig)
-            .Build<MemoryServerless>();
+        if (cfg.GetValue<bool>("UseAzureOpenAI"))
+        {
+            //ok in azure we can use managed identities so we need to check the configuration
+            if (this.AzureOpenAITextConfiguration.Auth == AzureOpenAIConfig.AuthTypes.APIKey)
+            {
+                //verify that we really have an api key.
+                Assert.False(string.IsNullOrEmpty(this.AzureOpenAITextConfiguration.APIKey));
+            }
+
+            if (this.AzureOpenAIEmbeddingConfiguration.Auth == AzureOpenAIConfig.AuthTypes.APIKey)
+            {
+                //verify that we really have an api key.
+                Assert.False(string.IsNullOrEmpty(this.AzureOpenAIEmbeddingConfiguration.APIKey));
+            }
+
+            this._memory = new KernelMemoryBuilder()
+                .With(new KernelMemoryConfig { DefaultIndexName = "default4tests" })
+                .WithSearchClientConfig(new SearchClientConfig { EmptyAnswer = NotFound })
+                .WithAzureOpenAITextGeneration(this.AzureOpenAITextConfiguration)
+                .WithAzureOpenAITextEmbeddingGeneration(this.AzureOpenAIEmbeddingConfiguration)
+                .WithElasticsearchMemoryDb(this._esConfig)
+                .Build<MemoryServerless>();
+        }
+        else
+        {
+            Assert.False(string.IsNullOrEmpty(this.OpenAiConfig.APIKey));
+
+            this._memory = new KernelMemoryBuilder()
+                .With(new KernelMemoryConfig { DefaultIndexName = "default4tests" })
+                .WithSearchClientConfig(new SearchClientConfig { EmptyAnswer = NotFound })
+                .WithOpenAI(this.OpenAiConfig)
+                .WithElasticsearchMemoryDb(this._esConfig)
+                .Build<MemoryServerless>();
+        }
     }
 
     [Fact]

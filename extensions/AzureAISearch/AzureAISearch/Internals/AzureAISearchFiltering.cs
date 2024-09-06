@@ -32,13 +32,14 @@ internal static class AzureAISearchFiltering
         var filtersForSearchInQuery = filterList
             // Filters with only one key, but not multiple values (i.e: excluding MemoryFilters.ByTag("department", "HR").ByTag("department", "Marketing") as here we want an `AND`)
             .Where(filter => !filter.IsEmpty() && filter.Keys.Count == 1 && filter.Values.First().Count == 1)
-            .SelectMany(filter => filter.Pairs) // Flattening to pairs
+            .SelectMany(filter => filter.GetFilters()) // Flattening to pairs
             .GroupBy(pair => pair.Key) // Grouping by the tag key
             .Where(g => g.Count() > 1)
             .Select(group => new
             {
                 Key = group.Key,
-                Values = group.Select(pair => $"{pair.Key}:{pair.Value?.Replace("'", "''", StringComparison.Ordinal)}").ToList(),
+                EqualValues = group.OfType<EqualFilter>().Select(baseFilter => $"{baseFilter.Key}:{baseFilter.Value?.Replace("'", "''", StringComparison.Ordinal)}").ToList(),
+                NotEqualValues = group.OfType<NotEqualFilter>().Select(baseFilter => $"{baseFilter.Key}:{baseFilter.Value?.Replace("'", "''", StringComparison.Ordinal)}").ToList(),
                 SearchInDelimiter = s_searchInDelimitersAvailable.FirstOrDefault(specialChar =>
                     !group.Any(pair =>
                         (pair.Value != null && pair.Value.Contains(specialChar, StringComparison.Ordinal)) ||
@@ -54,7 +55,15 @@ internal static class AzureAISearchFiltering
             // The default value of this parameter is ' ,' which means that any values with spaces and/or commas between them will be separated.
             // If you need to use separators other than spaces and commas because your values include those characters,
             // you can specify alternate delimiters such as '|' in this parameter.
-            conditions.Add($"tags/any(s: search.in(s, '{string.Join(filterGroup.SearchInDelimiter, filterGroup.Values)}', '{filterGroup.SearchInDelimiter}'))");
+            if (filterGroup.EqualValues.Count != 0)
+            {
+                conditions.Add($"tags/any(s: search.in(s, '{string.Join(filterGroup.SearchInDelimiter, filterGroup.EqualValues)}', '{filterGroup.SearchInDelimiter}'))");
+            }
+
+            if (filterGroup.NotEqualValues.Count != 0)
+            {
+                conditions.Add($"not tags/any(s: search.in(s, '{string.Join(filterGroup.SearchInDelimiter, filterGroup.NotEqualValues)}', '{filterGroup.SearchInDelimiter}'))");
+            }
         }
 
         //Exclude filters that were grouped before in the search.in process
@@ -65,13 +74,25 @@ internal static class AzureAISearchFiltering
 
         // Note: empty filters would lead to a syntax error, so even if they are supposed
         // to be removed upstream, we check again and remove them here too.
-        foreach (var filter in remainingFilters.Where(f => !f.IsEmpty()))
+        foreach (var filter in remainingFilters)
         {
             var filterConditions = filter.GetFilters()
-                .Select(keyValue =>
+                .Select(baseFilter =>
                 {
-                    var fieldValue = keyValue.Value?.Replace("'", "''", StringComparison.Ordinal);
-                    return $"tags/any(s: s eq '{keyValue.Key}{Constants.ReservedEqualsChar}{fieldValue}')";
+                    if (baseFilter is EqualFilter eq)
+                    {
+                        var fieldValue = eq.Value?.Replace("'", "''", StringComparison.Ordinal);
+                        return $"tags/any(s: s eq '{baseFilter.Key}{Constants.ReservedEqualsChar}{fieldValue}')";
+                    }
+                    else if (baseFilter is NotEqualFilter neq)
+                    {
+                        var fieldValue = neq.Value?.Replace("'", "''", StringComparison.Ordinal);
+                        return $"not tags/any(s: s eq '{baseFilter.Key}{Constants.ReservedEqualsChar}{fieldValue}')";
+                    }
+                    else
+                    {
+                        throw new AzureAISearchMemoryException($"Filter type {baseFilter.GetType().Name} is not supported.");
+                    }
                 })
                 .ToList();
 

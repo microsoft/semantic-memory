@@ -12,6 +12,7 @@ using Microsoft.Extensions.Logging;
 using Microsoft.KernelMemory.AI;
 using Microsoft.KernelMemory.Diagnostics;
 using Microsoft.KernelMemory.MemoryDb.Qdrant.Client;
+using Microsoft.KernelMemory.MemoryDb.Qdrant.Internals;
 using Microsoft.KernelMemory.MemoryStorage;
 
 namespace Microsoft.KernelMemory.MemoryDb.Qdrant;
@@ -160,14 +161,7 @@ public sealed class QdrantMemory : IMemoryDb, IMemoryDbUpsertBatch
         index = NormalizeIndexName(index);
         if (limit <= 0) { limit = int.MaxValue; }
 
-        // Remove empty filters
-        filters = filters?.Where(f => !f.IsEmpty()).ToList();
-
-        var requiredTags = new List<IEnumerable<string>>();
-        if (filters is { Count: > 0 })
-        {
-            requiredTags.AddRange(filters.Select(filter => filter.GetFilters().Select(x => $"{x.Key}{Constants.ReservedEqualsChar}{x.Value}")));
-        }
+        var requiredTags = CreateRequiredTagsFromMemoryFilters(filters);
 
         Embedding textEmbedding = await this._embeddingGenerator.GenerateEmbeddingAsync(text, cancellationToken).ConfigureAwait(false);
 
@@ -178,9 +172,9 @@ public sealed class QdrantMemory : IMemoryDb, IMemoryDbUpsertBatch
                 collectionName: index,
                 target: textEmbedding,
                 scoreThreshold: minRelevance,
-                requiredTags: requiredTags,
                 limit: limit,
                 withVectors: withEmbeddings,
+                requiredTags: requiredTags,
                 cancellationToken: cancellationToken).ConfigureAwait(false);
         }
         catch (IndexNotFoundException e)
@@ -207,14 +201,7 @@ public sealed class QdrantMemory : IMemoryDb, IMemoryDbUpsertBatch
         index = NormalizeIndexName(index);
         if (limit <= 0) { limit = int.MaxValue; }
 
-        // Remove empty filters
-        filters = filters?.Where(f => !f.IsEmpty()).ToList();
-
-        var requiredTags = new List<IEnumerable<string>>();
-        if (filters is { Count: > 0 })
-        {
-            requiredTags.AddRange(filters.Select(filter => filter.GetFilters().Select(x => $"{x.Key}{Constants.ReservedEqualsChar}{x.Value}")));
-        }
+        var requiredTags = CreateRequiredTagsFromMemoryFilters(filters);
 
         List<QdrantPoint<DefaultQdrantPayload>> results;
         try
@@ -280,6 +267,40 @@ public sealed class QdrantMemory : IMemoryDb, IMemoryDbUpsertBatch
         index = s_replaceIndexNameCharsRegex.Replace(index.Trim().ToLowerInvariant(), ValidSeparator);
 
         return index.Trim();
+    }
+
+    private static List<IEnumerable<TagFilter>> CreateRequiredTagsFromMemoryFilters(ICollection<MemoryFilter>? filters)
+    {
+        var requiredTags = new List<IEnumerable<TagFilter>>();
+        // Check if we have at least one non-empty filter
+        var nonEmptyFilters = filters?.Where(filters => !filters.IsEmpty()).ToArray() ?? Array.Empty<MemoryFilter>();
+        if (nonEmptyFilters.Length > 0)
+        {
+            foreach (var memoryFilter in nonEmptyFilters)
+            {
+                var filtersList = memoryFilter.GetFilters();
+                List<TagFilter> stringFilters = new();
+                foreach (var baseFilter in filtersList)
+                {
+                    if (baseFilter is EqualFilter eq)
+                    {
+                        stringFilters.Add(new TagFilter($"{eq.Key}{Constants.ReservedEqualsChar}{eq.Value}", TagFilterType.Equal));
+                    }
+                    else if (baseFilter is NotEqualFilter neq)
+                    {
+                        stringFilters.Add(new TagFilter($"{neq.Key}{Constants.ReservedEqualsChar}{neq.Value}", TagFilterType.NotEqual));
+                    }
+                    else
+                    {
+                        throw new QdrantException($"Filter of type {baseFilter.GetType().Name} is not supported by redis");
+                    }
+                }
+
+                requiredTags.Add(stringFilters);
+            }
+        }
+
+        return requiredTags;
     }
 
     #endregion

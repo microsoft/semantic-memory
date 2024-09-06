@@ -12,6 +12,7 @@ using System.Threading.Tasks;
 using Microsoft.Extensions.Logging;
 using Microsoft.KernelMemory.Diagnostics;
 using Microsoft.KernelMemory.MemoryDb.Qdrant.Client.Http;
+using Microsoft.KernelMemory.MemoryDb.Qdrant.Internals;
 using Microsoft.KernelMemory.MemoryStorage;
 
 namespace Microsoft.KernelMemory.MemoryDb.Qdrant.Client;
@@ -279,7 +280,7 @@ internal sealed class QdrantClient<T> where T : DefaultQdrantPayload, new()
     /// <returns>List of vectors</returns>
     public async Task<List<QdrantPoint<T>>> GetListAsync(
         string collectionName,
-        IEnumerable<IEnumerable<string>?>? requiredTags = null,
+        List<IEnumerable<TagFilter>>? requiredTags = null,
         int offset = 0,
         int limit = 1,
         bool withVectors = false,
@@ -339,7 +340,7 @@ internal sealed class QdrantClient<T> where T : DefaultQdrantPayload, new()
         double scoreThreshold,
         int limit = 1,
         bool withVectors = false,
-        IEnumerable<IEnumerable<string>?>? requiredTags = null,
+        List<IEnumerable<TagFilter>>? requiredTags = null,
         CancellationToken cancellationToken = default)
     {
         this._log.LogTrace("Searching top {0} nearest vectors", limit);

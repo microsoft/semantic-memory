@@ -72,6 +72,7 @@ public static class MimeTypes
     public const string ArchiveZip = "application/zip";
     public const string ArchiveRar = "application/vnd.rar";
     public const string Archive7Zip = "application/x-7z-compressed";
+    public const string OctetStream = "application/octet-stream";
 }
 
 public static class FileExtensions
@@ -136,6 +137,7 @@ public static class FileExtensions
     public const string ArchiveZip = ".zip";
     public const string ArchiveRar = ".rar";
     public const string Archive7Zip = ".7z";
+    public const string Bin = ".bin";
 }
 
 public interface IMimeTypeDetection
@@ -209,6 +211,7 @@ public class MimeTypesDetection : IMimeTypeDetection
             { FileExtensions.ArchiveZip, MimeTypes.ArchiveZip },
             { FileExtensions.ArchiveRar, MimeTypes.ArchiveRar },
             { FileExtensions.Archive7Zip, MimeTypes.Archive7Zip },
+            { FileExtensions.Bin, MimeTypes.OctetStream }
         };
 
     public string GetFileType(string filename)

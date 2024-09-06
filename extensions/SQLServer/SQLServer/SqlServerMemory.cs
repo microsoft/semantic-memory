@@ -682,54 +682,92 @@ public sealed class SqlServerMemory : IMemoryDb, IMemoryDbUpsertBatch, IDisposab
     {
         var filterBuilder = new StringBuilder();
 
-        if (filters is null || filters.Count <= 0 || filters.All(f => f.Count <= 0))
+        if (filters?.Any(f => !f.IsEmpty()) == true)
         {
-            return string.Empty;
-        }
+            filterBuilder.Append("AND ( ");
 
-        filterBuilder.Append("AND ( ");
-
-        for (int i = 0; i < filters.Count; i++)
-        {
-            var filter = filters.ElementAt(i);
-
-            if (i > 0)
+            var nonEmptyFilter = filters.Where(f => !f.IsEmpty()).ToArray();
+            for (int i = 0; i < nonEmptyFilter.Length; i++)
             {
-                filterBuilder.Append(" OR ");
-            }
+                var filter = nonEmptyFilter[i];
 
-            for (int j = 0; j < filter.Pairs.Count(); j++)
-            {
-                var value = filter.Pairs.ElementAt(j);
-
-                if (j > 0)
+                if (i > 0)
                 {
-                    filterBuilder.Append(" AND ");
+                    filterBuilder.Append(" OR ");
                 }
 
-                filterBuilder.Append(" ( ");
+                var validFilters = filter.GetFilters().ToArray();
+                for (int j = 0; j < validFilters.Length; j++)
+                {
+                    var baseFilter = validFilters[j];
 
-                filterBuilder.Append(CultureInfo.CurrentCulture, $@"EXISTS (
-                         SELECT
-	                        1
-                        FROM {this.GetFullTableName($"{this._config.TagsTableName}_{index}")} AS [tags]
-                        WHERE
-	                        [tags].[memory_id] = {this.GetFullTableName(this._config.MemoryTableName)}.[id]
-                            AND [name] = @filter_{i}_{j}_name
-                            AND [value] = @filter_{i}_{j}_value
-                        )
-                    ");
+                    if (j > 0)
+                    {
+                        filterBuilder.Append(" AND ");
+                    }
 
-                filterBuilder.Append(" ) ");
+                    filterBuilder.Append(" ( ");
 
-                parameters.AddWithValue($"@filter_{i}_{j}_name", value.Key);
-                parameters.AddWithValue($"@filter_{i}_{j}_value", value.Value);
+                    if (baseFilter is EqualFilter eq)
+                    {
+                        filterBuilder.Append(CultureInfo.CurrentCulture, $@"
+    EXISTS (
+        SELECT
+	    1
+    FROM {this.GetFullTableName($"{this._config.TagsTableName}_{index}")} AS [tags]
+    WHERE
+	    [tags].[memory_id] = {this.GetFullTableName(this._config.MemoryTableName)}.[id]
+        AND [name] = @filter_{i}_{j}_name
+        AND [value] = @filter_{i}_{j}_value
+    )
+"
+                        );
+
+                        //now that I've appended a clause, I need to add the parameters
+
+                        parameters.AddWithValue($"@filter_{i}_{j}_name", eq.Key);
+                        parameters.AddWithValue($"@filter_{i}_{j}_value", eq.Value);
+                    }
+                    else if (baseFilter is NotEqualFilter neq)
+                    {
+                        //We change only EXISTS to NOT EXISTS but we left the structure of the code with a sequence
+                        //of else if for future expansino of the query syntax where each filter will have its own clause
+                        filterBuilder.Append(CultureInfo.CurrentCulture, $@"
+    NOT EXISTS (
+        SELECT
+	    1
+    FROM {this.GetFullTableName($"{this._config.TagsTableName}_{index}")} AS [tags]
+    WHERE
+	    [tags].[memory_id] = {this.GetFullTableName(this._config.MemoryTableName)}.[id]
+        AND [name] = @filter_{i}_{j}_name
+        AND [value] = @filter_{i}_{j}_value
+    )
+"
+                        );
+
+                        //now that I've appended a clause, I need to add the parameters
+
+                        parameters.AddWithValue($"@filter_{i}_{j}_name", neq.Key);
+                        parameters.AddWithValue($"@filter_{i}_{j}_value", neq.Value);
+                    }
+                    else
+                    {
+                        throw new SqlServerMemoryException($"Filter of type {baseFilter.GetType().Name} is not supported by redis");
+                    }
+
+                    filterBuilder.Append(" ) ");
+                }
             }
+
+            filterBuilder.Append(" )");
+
+            return filterBuilder.ToString();
         }
-
-        filterBuilder.Append(" )");
-
-        return filterBuilder.ToString();
+        else
+        {
+            //no active filter
+            return string.Empty;
+        }
     }
 
     private async Task<MemoryRecord> ReadEntryAsync(SqlDataReader dataReader, bool withEmbedding, CancellationToken cancellationToken = default)

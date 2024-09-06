@@ -73,7 +73,7 @@ public class IndexNameTests : BaseFunctionalTestCase
             $"" +
             $"The expected number of errors was {errorCount}.");
 
-        Assert.True(errorCount == exception.Errors.Count(), $"The number of errprs expected is different than the number of errors found.");
+        Assert.True(errorCount == exception.Errors.Count(), $"The number of errors expected is different than the number of errors found.");
     }
 
     [Fact]

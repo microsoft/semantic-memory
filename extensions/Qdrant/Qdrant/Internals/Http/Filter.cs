@@ -1,6 +1,7 @@
 ﻿// Copyright (c) Microsoft. All rights reserved.
 
 using System.Collections.Generic;
+using System.Linq;
 using System.Text.Json.Serialization;
 
 namespace Microsoft.KernelMemory.MemoryDb.Qdrant.Client.Http;
@@ -93,6 +94,23 @@ internal sealed class Filter
                         break;
                 }
             }
+        }
+    }
+
+    internal sealed class MustNotClause
+    {
+        [JsonPropertyName("must_not")]
+        public List<MatchValueClause> Clauses { get; set; }
+
+        public MustNotClause(string key, object value)
+        {
+            this.Clauses = new();
+            this.Clauses.Add(new MatchValueClause(key, value));
+        }
+
+        internal void Validate()
+        {
+            this.Clauses.Single().Validate();
         }
     }
 

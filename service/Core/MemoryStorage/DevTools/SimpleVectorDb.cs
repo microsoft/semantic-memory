@@ -212,12 +212,22 @@ public class SimpleVectorDb : IMemoryDb
             var match = true;
 
             // Verify that all conditions are met (AND logic)
-            foreach (KeyValuePair<string, List<string?>> condition in filter)
+            var allFilters = filter.GetFilters();
+            foreach (var baseFilter in allFilters)
             {
-                // Check if the tag name + value is present
-                for (int index = 0; match && index < condition.Value.Count; index++)
+                if (baseFilter is EqualFilter eq)
                 {
-                    match = match && (tags.ContainsKey(condition.Key) && tags[condition.Key].Contains(condition.Value[index]));
+                    // Verify that it contains key and value required
+                    match = match && tags.ContainsKey(eq.Key) && tags[eq.Key].Contains(eq.Value);
+                }
+                else if (baseFilter is NotEqualFilter neq)
+                {
+                    // Verity that tag is not contained at all, or if is present it doesn't contain the value
+                    match = match && (!tags.ContainsKey(neq.Key) || !tags[neq.Key].Contains(neq.Value));
+                }
+                else
+                {
+                    throw new ArgumentException($"Unknown filter type {baseFilter.GetType()}");
                 }
             }
 

@@ -12,16 +12,40 @@ public class DefaultTests : BaseFunctionalTestCase
 
     public DefaultTests(IConfiguration cfg, ITestOutputHelper output) : base(cfg, output)
     {
-        Assert.False(string.IsNullOrEmpty(this.OpenAiConfig.APIKey));
+        if (cfg.GetValue<bool>("UseAzureOpenAI"))
+        {
+            //ok in azure we can use managed identities so we need to check the configuration
+            if (this.AzureOpenAITextConfiguration.Auth == AzureOpenAIConfig.AuthTypes.APIKey)
+            {
+                //verify that we really have an api key.
+                Assert.False(string.IsNullOrEmpty(this.AzureOpenAITextConfiguration.APIKey));
+            }
 
-        this._memory = new KernelMemoryBuilder()
-            .With(new KernelMemoryConfig { DefaultIndexName = "default4tests" })
-            .WithSearchClientConfig(new SearchClientConfig { EmptyAnswer = NotFound })
-            .WithOpenAI(this.OpenAiConfig)
-            // .WithAzureOpenAITextGeneration(this.AzureOpenAITextConfiguration)
-            // .WithAzureOpenAITextEmbeddingGeneration(this.AzureOpenAIEmbeddingConfiguration)
-            .WithPostgresMemoryDb(this.PostgresConfig)
-            .Build<MemoryServerless>();
+            if (this.AzureOpenAIEmbeddingConfiguration.Auth == AzureOpenAIConfig.AuthTypes.APIKey)
+            {
+                //verify that we really have an api key.
+                Assert.False(string.IsNullOrEmpty(this.AzureOpenAIEmbeddingConfiguration.APIKey));
+            }
+
+            this._memory = new KernelMemoryBuilder()
+                .With(new KernelMemoryConfig { DefaultIndexName = "default4tests" })
+                .WithSearchClientConfig(new SearchClientConfig { EmptyAnswer = NotFound })
+                .WithAzureOpenAITextGeneration(this.AzureOpenAITextConfiguration)
+                .WithAzureOpenAITextEmbeddingGeneration(this.AzureOpenAIEmbeddingConfiguration)
+                .WithPostgresMemoryDb(this.PostgresConfig)
+                .Build<MemoryServerless>();
+        }
+        else
+        {
+            Assert.False(string.IsNullOrEmpty(this.OpenAiConfig.APIKey));
+
+            this._memory = new KernelMemoryBuilder()
+                .With(new KernelMemoryConfig { DefaultIndexName = "default4tests" })
+                .WithSearchClientConfig(new SearchClientConfig { EmptyAnswer = NotFound })
+                .WithOpenAI(this.OpenAiConfig)
+                .WithPostgresMemoryDb(this.PostgresConfig)
+                .Build<MemoryServerless>();
+        }
     }
 
     [Fact]

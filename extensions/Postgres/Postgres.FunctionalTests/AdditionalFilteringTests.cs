@@ -1,4 +1,4 @@
-// Copyright (c) Microsoft. All rights reserved.
+﻿// Copyright (c) Microsoft. All rights reserved.
 
 using Microsoft.KernelMemory;
 using Microsoft.KM.TestHelpers;
@@ -11,13 +11,38 @@ public class AdditionalFilteringTests : BaseFunctionalTestCase
 
     public AdditionalFilteringTests(IConfiguration cfg, ITestOutputHelper output) : base(cfg, output)
     {
-        this._memory = new KernelMemoryBuilder()
-            .WithSearchClientConfig(new SearchClientConfig { EmptyAnswer = NotFound })
-            //.WithOpenAI(this.OpenAiConfig)
-            .WithAzureOpenAITextGeneration(this.AzureOpenAITextConfiguration)
-            .WithAzureOpenAITextEmbeddingGeneration(this.AzureOpenAIEmbeddingConfiguration)
-            .WithPostgresMemoryDb(this.PostgresConfig)
-            .Build<MemoryServerless>();
+        if (cfg.GetValue<bool>("UseAzureOpenAI"))
+        {
+            //ok in azure we can use managed identities so we need to check the configuration
+            if (this.AzureOpenAITextConfiguration.Auth == AzureOpenAIConfig.AuthTypes.APIKey)
+            {
+                //verify that we really have an api key.
+                Assert.False(string.IsNullOrEmpty(this.AzureOpenAITextConfiguration.APIKey));
+            }
+
+            if (this.AzureOpenAIEmbeddingConfiguration.Auth == AzureOpenAIConfig.AuthTypes.APIKey)
+            {
+                //verify that we really have an api key.
+                Assert.False(string.IsNullOrEmpty(this.AzureOpenAIEmbeddingConfiguration.APIKey));
+            }
+
+            this._memory = new KernelMemoryBuilder()
+                .WithSearchClientConfig(new SearchClientConfig { EmptyAnswer = NotFound })
+                .WithAzureOpenAITextGeneration(this.AzureOpenAITextConfiguration)
+                .WithAzureOpenAITextEmbeddingGeneration(this.AzureOpenAIEmbeddingConfiguration)
+                .WithPostgresMemoryDb(this.PostgresConfig)
+                .Build<MemoryServerless>();
+        }
+        else
+        {
+            Assert.False(string.IsNullOrEmpty(this.OpenAiConfig.APIKey));
+
+            this._memory = new KernelMemoryBuilder()
+                .WithSearchClientConfig(new SearchClientConfig { EmptyAnswer = NotFound })
+                .WithOpenAI(this.OpenAiConfig)
+                .WithPostgresMemoryDb(this.PostgresConfig)
+                .Build<MemoryServerless>();
+        }
     }
 
     [Fact]

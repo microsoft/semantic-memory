@@ -5,7 +5,6 @@ using System.Collections.Generic;
 using System.Diagnostics.CodeAnalysis;
 using System.Linq;
 using System.Runtime.CompilerServices;
-using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
@@ -216,9 +215,6 @@ public sealed class PostgresMemory : IMemoryDb, IDisposable
         GC.SuppressFinalize(this);
     }
 
-    /// <summary>
-    /// Disposes the managed resources.
-    /// </summary>
     private void Dispose(bool disposing)
     {
         if (disposing)
@@ -259,7 +255,10 @@ public sealed class PostgresMemory : IMemoryDb, IDisposable
         var sql = "";
         Dictionary<string, object> unsafeSqlUserValues = new();
 
-        if (filters is not { Count: > 0 })
+        var nonEmptyFilters = filters?.Where(filters => !filters.IsEmpty()).ToArray() ?? Array.Empty<MemoryFilter>();
+
+        //No query, we do not have filters.
+        if (nonEmptyFilters.Length == 0)
         {
             return (sql, unsafeSqlUserValues);
         }
@@ -267,24 +266,28 @@ public sealed class PostgresMemory : IMemoryDb, IDisposable
         var tagCounter = 0;
         var orConditions = new List<string>();
 
-        foreach (MemoryFilter filter in filters.Where(f => !f.IsEmpty()))
+        foreach (MemoryFilter filter in nonEmptyFilters)
         {
-            var andSql = new StringBuilder();
-            andSql.AppendLine("(");
-
             if (filter is PostgresMemoryFilter extendedFilter)
             {
                 // use PostgresMemoryFilter filtering logic
                 throw new NotImplementedException("PostgresMemoryFilter is not supported yet");
             }
 
-            List<string> requiredTags = filter.GetFilters().Select(x => $"{x.Key}{Constants.ReservedEqualsChar}{x.Value}").ToList();
+            var allFilters = filter.GetFilters().ToArray();
+
+            List<string> equalTags = allFilters
+                .OfType<EqualFilter>()
+                .Select(x => $"{x.Key}{Constants.ReservedEqualsChar}{x.Value}").ToList();
             List<string> safeSqlPlaceholders = new();
-            if (requiredTags.Count > 0)
+
+            List<string> conditions = new();
+
+            if (equalTags.Count > 0)
             {
                 var safeSqlPlaceholder = $"@placeholder{tagCounter++}";
                 safeSqlPlaceholders.Add(safeSqlPlaceholder);
-                unsafeSqlUserValues[safeSqlPlaceholder] = requiredTags;
+                unsafeSqlUserValues[safeSqlPlaceholder] = equalTags;
 
                 // All tags are required
                 //  tags @> ARRAY['user:001', 'type:news', '__document_id:b405']::text[]  <== all tags are required <=== we are using this
@@ -293,11 +296,24 @@ public sealed class PostgresMemory : IMemoryDb, IDisposable
                 //  $"{PostgresSchema.PlaceholdersTags} @> " + safeSqlPlaceholder
                 //  $"{PostgresSchema.PlaceholdersTags} @> " + safeSqlPlaceholder + "::text[]"
                 //  $"{PostgresSchema.PlaceholdersTags} @> ARRAY[" + safeSqlPlaceholder + "]::text[]"
-                andSql.AppendLine($"{PostgresSchema.PlaceholdersTags} @> " + safeSqlPlaceholder);
+                conditions.Add($"{PostgresSchema.PlaceholdersTags} @> " + safeSqlPlaceholder);
             }
 
-            andSql.AppendLine(")");
-            orConditions.Add(andSql.ToString());
+            List<string> notEqualTags = allFilters
+                .OfType<NotEqualFilter>()
+                .Select(x => $"{x.Key}{Constants.ReservedEqualsChar}{x.Value}").ToList();
+            if (notEqualTags.Count > 0)
+            {
+                var safeSqlPlaceholder = $"@placeholder{tagCounter++}";
+                safeSqlPlaceholders.Add(safeSqlPlaceholder);
+                unsafeSqlUserValues[safeSqlPlaceholder] = notEqualTags;
+
+                // Tags should not be present now we need to combine this query with the previous one using AND if we
+                // had equality tag.
+                conditions.Add($"NOT ({PostgresSchema.PlaceholdersTags} && " + safeSqlPlaceholder + ")");
+            }
+
+            orConditions.Add($"( {string.Join(" AND ", conditions)} )");
         }
 
         sql = string.Join(" OR ", orConditions);

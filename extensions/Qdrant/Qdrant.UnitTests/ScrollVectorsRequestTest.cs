@@ -2,6 +2,7 @@
 
 using System.Text.Json;
 using Microsoft.KernelMemory.MemoryDb.Qdrant.Client.Http;
+using Microsoft.KernelMemory.MemoryDb.Qdrant.Internals;
 using Microsoft.KM.TestHelpers;
 using Xunit.Abstractions;
 
@@ -92,11 +93,11 @@ public class ScrollVectorsRequestTest : BaseUnitTestCase
         // Arrange
         var request = ScrollVectorsRequest
             .Create("coll")
-            .HavingAllTags(["user:devis", "type:blog"])
+            .HavingAllTags([new TagFilter("user:devis", TagFilterType.Equal), new TagFilter("type:blog", TagFilterType.Equal)])
             .HavingSomeTags(new[]
             {
-                new[] { "month:january", "year:2000" },
-                new[] { "month:july", "year:2003" },
+                new[] { new TagFilter("month:january", TagFilterType.Equal), new TagFilter("year:2000", TagFilterType.Equal), },
+                new[] { new TagFilter("month:july", TagFilterType.Equal), new TagFilter("year:2003", TagFilterType.Equal), },
             });
 
         // Act
@@ -157,8 +158,8 @@ public class ScrollVectorsRequestTest : BaseUnitTestCase
         // Arrange
         var request = ScrollVectorsRequest
             .Create("coll")
-            .HavingAllTags(["user:devis", "type:blog"])
-            .HavingSomeTags([new[] { "month:january", "year:2000" }]);
+            .HavingAllTags([new TagFilter("user:devis", TagFilterType.Equal), new TagFilter("type:blog", TagFilterType.Equal)])
+            .HavingSomeTags([new[] { new TagFilter("month:january", TagFilterType.Equal), new TagFilter("year:2000", TagFilterType.Equal) }]);
 
         // Act
         var actual = JsonSerializer.Serialize(request);

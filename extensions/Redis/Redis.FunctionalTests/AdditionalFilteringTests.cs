@@ -1,4 +1,4 @@
-// Copyright (c) Microsoft. All rights reserved.
+﻿// Copyright (c) Microsoft. All rights reserved.
 
 using Microsoft.KernelMemory;
 using Microsoft.KernelMemory.DocumentStorage.DevTools;
@@ -14,12 +14,40 @@ public class AdditionalFilteringTests : BaseFunctionalTestCase
 
     public AdditionalFilteringTests(IConfiguration cfg, ITestOutputHelper output) : base(cfg, output)
     {
-        this._memory = new KernelMemoryBuilder()
-            .WithRedisMemoryDb(this.RedisConfig)
-            .WithSimpleFileStorage(new SimpleFileStorageConfig { StorageType = FileSystemTypes.Volatile, Directory = "_files" })
-            .WithOpenAITextGeneration(this.OpenAiConfig)
-            .WithOpenAITextEmbeddingGeneration(this.OpenAiConfig)
-            .Build();
+        if (cfg.GetValue<bool>("UseAzureOpenAI"))
+        {
+            //ok in azure we can use managed identities so we need to check the configuration
+            if (this.AzureOpenAITextConfiguration.Auth == AzureOpenAIConfig.AuthTypes.APIKey)
+            {
+                //verify that we really have an api key.
+                Assert.False(string.IsNullOrEmpty(this.AzureOpenAITextConfiguration.APIKey));
+            }
+
+            if (this.AzureOpenAIEmbeddingConfiguration.Auth == AzureOpenAIConfig.AuthTypes.APIKey)
+            {
+                //verify that we really have an api key.
+                Assert.False(string.IsNullOrEmpty(this.AzureOpenAIEmbeddingConfiguration.APIKey));
+            }
+
+            this._memory = new KernelMemoryBuilder()
+                .WithRedisMemoryDb(this.RedisConfig)
+                .WithSimpleFileStorage(new SimpleFileStorageConfig { StorageType = FileSystemTypes.Volatile, Directory = "_files" })
+                .WithAzureOpenAITextGeneration(this.AzureOpenAITextConfiguration)
+                .WithAzureOpenAITextEmbeddingGeneration(this.AzureOpenAIEmbeddingConfiguration)
+                .Build();
+        }
+        else
+        {
+            //use standard openai
+            Assert.False(string.IsNullOrEmpty(this.OpenAiConfig.APIKey));
+
+            this._memory = new KernelMemoryBuilder()
+                .WithRedisMemoryDb(this.RedisConfig)
+                .WithSimpleFileStorage(new SimpleFileStorageConfig { StorageType = FileSystemTypes.Volatile, Directory = "_files" })
+                .WithOpenAITextGeneration(this.OpenAiConfig)
+                .WithOpenAITextEmbeddingGeneration(this.OpenAiConfig)
+                .Build();
+        }
     }
 
     [Fact]

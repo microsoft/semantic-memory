@@ -222,11 +222,26 @@ public sealed class MongoDbAtlasMemory : MongoDbAtlasBaseStorage, IMemoryDb
             List<FilterDefinition<MongoDbAtlasMemoryRecord>> filtersArray = new();
             foreach (var singleFilter in thisFilter)
             {
-                var condition = Builders<MongoDbAtlasMemoryRecord>.Filter.And(
-                    Builders<MongoDbAtlasMemoryRecord>.Filter.Eq("Tags.Key", singleFilter.Key),
-                    Builders<MongoDbAtlasMemoryRecord>.Filter.Eq("Tags.Values", singleFilter.Value)
-                );
-                filtersArray.Add(condition);
+                if (singleFilter is EqualFilter ef)
+                {
+                    var condition = Builders<MongoDbAtlasMemoryRecord>.Filter.And(
+                        Builders<MongoDbAtlasMemoryRecord>.Filter.Eq("Tags.Key", singleFilter.Key),
+                        Builders<MongoDbAtlasMemoryRecord>.Filter.Eq("Tags.Values", singleFilter.Value)
+                    );
+                    filtersArray.Add(condition);
+                }
+                else if (singleFilter is NotEqualFilter nef)
+                {
+                    var condition = Builders<MongoDbAtlasMemoryRecord>.Filter.And(
+                        Builders<MongoDbAtlasMemoryRecord>.Filter.Eq("Tags.Key", singleFilter.Key),
+                        Builders<MongoDbAtlasMemoryRecord>.Filter.Ne("Tags.Values", singleFilter.Value)
+                    );
+                    filtersArray.Add(condition);
+                }
+                else
+                {
+                    throw new MongoDbAtlasException($"Filter {singleFilter.GetType().Name} is not supported");
+                }
             }
 
             // if we have more than one condition, we need to compose all conditions with AND

@@ -1,4 +1,4 @@
-// Copyright (c) Microsoft. All rights reserved.
+﻿// Copyright (c) Microsoft. All rights reserved.
 
 using System.Diagnostics.CodeAnalysis;
 using System.Globalization;
@@ -176,21 +176,30 @@ public sealed class RedisMemory : IMemoryDb
         };
 
         var sb = new StringBuilder();
-        if (filters != null && filters.Any(x => x.Pairs.Any()))
+        if (filters?.Any(f => !f.IsEmpty()) == true)
         {
             sb.Append('(');
-            foreach (var filter in filters)
+            //now filtering for each filter that is not empty
+            foreach (var filter in filters.Where(f => !f.IsEmpty()))
             {
                 sb.Append('(');
-                foreach ((string key, string? value) in filter.Pairs)
+                var validFilters = filter.GetFilters();
+                foreach (BaseFilter baseFilter in validFilters)
                 {
-                    if (value is null)
+                    if (baseFilter is EqualFilter eq)
                     {
-                        this._logger.LogError("Attempted to perform null check on tag field. This behavior is not supported by Redis");
-                        throw new RedisException("Attempted to perform null check on tag field. This behavior is not supported by Redis");
+                        sb.Append(CultureInfo.InvariantCulture, $"@{eq.Key}:{{{eq.Value}}} ");
                     }
-
-                    sb.Append(CultureInfo.InvariantCulture, $"@{key}:{{{value}}} ");
+                    else if (baseFilter is NotEqualFilter neq)
+                    {
+                        //use the -(tag:value) syntax for not equal to avoid returning ANY record where ONE of the
+                        //tag is the one we are filtering on.
+                        sb.Append(CultureInfo.InvariantCulture, $"-(@{neq.Key}:{{{neq.Value}}}) ");
+                    }
+                    else
+                    {
+                        throw new RedisException($"Filter of type {baseFilter.GetType().Name} is not supported by redis");
+                    }
                 }
 
                 sb.Replace(" ", ")|", sb.Length - 1, 1);

@@ -1,6 +1,7 @@
 ﻿// Copyright (c) Microsoft. All rights reserved.
 
 using System.Text;
+using Microsoft.KernelMemory;
 using Microsoft.KernelMemory.DocumentStorage;
 using Microsoft.KernelMemory.MongoDbAtlas;
 using Microsoft.KM.TestHelpers;
@@ -60,6 +61,13 @@ public abstract class StorageTests : BaseFunctionalTestCase
         }
     }
 
+    private async Task<string> ReadFileContentAsync(StreamableFileContent streamableFileContent)
+    {
+        using var stream = await streamableFileContent.GetStreamAsync();
+        using var reader = new StreamReader(stream);
+        return await reader.ReadToEndAsync();
+    }
+
     [Fact]
     [Trait("Category", "MongoDbAtlas")]
     public async Task SaveFilesHonorsId()
@@ -73,7 +81,7 @@ public abstract class StorageTests : BaseFunctionalTestCase
 
         // Assert
         var file = await this._sut.ReadFileAsync(this.IndexName, id, "filename.txt");
-        var content = file.ToString();
+        var content = await this.ReadFileContentAsync(file);
 
         Assert.Equal("Hello World 2", content);
     }
@@ -96,12 +104,12 @@ public abstract class StorageTests : BaseFunctionalTestCase
 
         // Assert
         var file = await this._sut.ReadFileAsync(this.IndexName, id, fileName1);
-        var content = file.ToString();
+        var content = await this.ReadFileContentAsync(file);
 
         Assert.Equal(content1, content);
 
         file = await this._sut.ReadFileAsync(this.IndexName, id, fileName2);
-        content = file.ToString();
+        content = await this.ReadFileContentAsync(file);
         Assert.Equal(content2, content);
     }
 
@@ -119,7 +127,7 @@ public abstract class StorageTests : BaseFunctionalTestCase
 
         // Assert
         var file = await this._sut.ReadFileAsync(this.IndexName, id, fileName);
-        var content = file.ToString();
+        var content = await this.ReadFileContentAsync(file);
 
         Assert.Equal("Hello World 2", content);
     }
@@ -139,12 +147,12 @@ public abstract class StorageTests : BaseFunctionalTestCase
 
         // Assert
         var file = await this._sut.ReadFileAsync(this.IndexName, id, fileName1);
-        var content = file.ToString();
+        var content = await this.ReadFileContentAsync(file);
 
         Assert.Equal("Hello World", content);
 
         file = await this._sut.ReadFileAsync(this.IndexName, id, fileName2);
-        content = file.ToString();
+        content = await this.ReadFileContentAsync(file);
         Assert.Equal("Hello World 2", content);
     }
 
