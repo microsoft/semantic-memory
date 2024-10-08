@@ -1,0 +1,20 @@
+stages:
+- stage: Build
+  displayName: Build Stage
+  jobs:
+  - job: DotNetBuild
+    displayName: Build Job
+    pool:
+      vmImage: 'ubuntu-latest'
+    workspace:
+      clean: all
+    steps:
+    - task: UseDotNet@2
+      displayName: Use .NET 8
+      inputs:
+        packageType: 'sdk'
+        version: '8.x'
+    - task: DotNetCoreCLI@2
+      displayName: dotnet build
+      inputs:
+        command: 'build'
