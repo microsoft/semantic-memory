@@ -27,7 +27,7 @@ To set your secrets with .NET
 [Secret Manager](https://learn.microsoft.com/en-us/aspnet/core/security/app-secrets):
 
 ```
-cd examples/data/nl2sql/nl2sql.console
+cd examples/200-dotnet-nl2sql/nl2sql.console
 
 dotnet user-secrets set "AZURE_OPENAI_DEPLOYMENT_NAME" "gpt-4-deployment"
 dotnet user-secrets set "AZURE_OPENAI_EMBEDDINGS_DEPLOYMENT_NAME" "text-embedding-ada-002-deployment"
@@ -70,7 +70,7 @@ Use the .NET [Secret Manager](https://learn.microsoft.com/en-us/aspnet/core/secu
 to define the connection strings to the two databases targeted by this sample:
 
 ```
-cd examples/data/nl2sql/nl2sql.console
+cd examples/200-dotnet-nl2sql/nl2sql.console
 
 dotnet user-secrets set ConnectionStrings:AdventureWorksLT "..."
 dotnet user-secrets set ConnectionStrings:DescriptionTest "..."
@@ -83,7 +83,7 @@ The following steps allows you to describe and target your own database schema. 
 
 1. Define the connection string so it can be consumed to reverse engineer your schema and also by the console:
 ```
-cd examples/data/nl2sql/nl2sql.console
+cd examples/200-dotnet-nl2sql/nl2sql.console
 
 dotnet user-secrets set ConnectionStrings:YourSchema "..."
 ```
