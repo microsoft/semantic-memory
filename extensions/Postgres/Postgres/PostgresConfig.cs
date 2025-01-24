@@ -108,6 +108,12 @@ public class PostgresConfig
     public List<string> CreateTableSql { get; set; } = [];
 
     /// <summary>
+    /// Important: when using hybrid search, relevance scores
+    /// are very different from when using just vector search.
+    /// </summary>
+    public bool UseHybridSearch { get; set; } = false;
+
+    /// <summary>
     /// Create a new instance of the configuration
     /// </summary>
     public PostgresConfig()
