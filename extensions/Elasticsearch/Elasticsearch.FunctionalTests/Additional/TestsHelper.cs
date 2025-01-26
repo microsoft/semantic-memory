@@ -18,6 +18,7 @@ internal static class TestsHelper
     public const string LoremIpsumFileName = "Data/file3-lorem-ipsum.docx";
     public const string NASANewsFileName = "data/file5-NASA-news.pdf";
     public const string SKReadmeFileName = "Data/file4-SK-Readme.pdf";
+    public const string SKWikipediaSiliconFileName = "Data/file7-Wikipedia-Silicon.txt";
 
     /// <summary>
     /// Deletes all indices that are created by all test methods of the given class.

@@ -218,15 +218,20 @@ public class ElasticsearchMemory : IMemoryDb
         Embedding embedding = await this._embeddingGenerator.GenerateEmbeddingAsync(text, cancellationToken).ConfigureAwait(false);
         var coll = embedding.Data.ToArray();
 
+        //adjust min score for cosine similarity
+        //https://www.elastic.co/guide/en/elasticsearch/reference/current/knn-search.html#knn-similarity-search
+        float adjustedMinSimilarityScore = (float)(2 * minRelevance - 1);
+
         var resp = await this._client.SearchAsync<ElasticsearchMemoryRecord>(s =>
-                    s.Index(index)
+                    s.Index(index).Size(limit)
                         .Knn(qd =>
                         {
                             qd.k(limit)
                                 .Filter(q => this.ConvertTagFilters(q, filters))
                                 .NumCandidates(limit + 100)
                                 .Field(x => x.Vector)
-                                .QueryVector(coll);
+                                .QueryVector(coll)
+                                .Similarity(adjustedMinSimilarityScore);
                         }),
                 cancellationToken)
             .ConfigureAwait(false);
