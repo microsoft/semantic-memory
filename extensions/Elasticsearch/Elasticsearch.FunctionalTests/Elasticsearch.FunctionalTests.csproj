@@ -31,6 +31,9 @@
       <None Update="Data\file1-Wikipedia-Carbon.txt">
         <CopyToOutputDirectory>Always</CopyToOutputDirectory>
       </None>
+      <None Update="Data\file7-Wikipedia-Silicon.txt">
+        <CopyToOutputDirectory>Always</CopyToOutputDirectory>
+      </None>
       <None Update="Data\file2-Wikipedia-Moon.txt">
         <CopyToOutputDirectory>Always</CopyToOutputDirectory>
       </None>

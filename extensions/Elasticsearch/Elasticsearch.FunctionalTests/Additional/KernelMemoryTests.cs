@@ -27,6 +27,57 @@ public class KernelMemoryTests : MemoryDbFunctionalTest
 
     [Fact]
     [Trait("Category", "Elasticsearch")]
+    public async Task ItSupportsLimitsAndMinRelevanceScoreAsync()
+    {
+        string indexName = nameof(this.ItSupportsLimitsAndMinRelevanceScoreAsync);
+        this.Output.WriteLine($"Index name: {indexName}");
+
+        const string Id = "ItSupportsLimitsAndMinRelevance-file7-Silicon-Carbon.txt";
+
+        this.Output.WriteLine("Uploading document");
+        await this.KernelMemory.ImportDocumentAsync(
+            new Document(Id)
+                .AddFile(TestsHelper.SKWikipediaSiliconFileName),
+            index: indexName,
+            steps: Constants.PipelineWithoutSummary);
+
+        while (!await this.KernelMemory.IsDocumentReadyAsync(documentId: Id, index: indexName))
+        {
+            this.Output.WriteLine("Waiting for memory ingestion to complete...");
+            await Task.Delay(TimeSpan.FromSeconds(2));
+        }
+
+        //no minRelevance or limit:
+        var results = await this.KernelMemory.SearchAsync("What is Silicon?", index: indexName, null, null, minRelevance: 0, limit: -1);
+
+        Assert.True((results.Results.Count > 0));
+        var partitions = results.Results[0].Partitions;
+        var maxRelevance = partitions.Max(p => p.Relevance);
+        var minRelevance = partitions.Min(p => p.Relevance);
+
+        this.Output.WriteLine($"{partitions.Count}, Max Relevance: {maxRelevance}, Min Relevance: {minRelevance}");
+        Assert.True((partitions.Count > 5));
+        Assert.True((minRelevance < 0.82));
+
+        //test limit 5:
+        results = await this.KernelMemory.SearchAsync("What is Silicon?", index: indexName, null, null, minRelevance: 0, limit: 5);
+        partitions = results.Results[0].Partitions;
+        Assert.True((partitions.Count == 5));
+
+        //test min relevance 0.82:
+        results = await this.KernelMemory.SearchAsync("What is Silicon?", index: indexName, null, null, minRelevance: 0.82, limit: 10);
+        partitions = results.Results[0].Partitions;
+        minRelevance = partitions.Min(p => p.Relevance);
+        Assert.True((minRelevance >= 0.82));
+
+        await this.KernelMemory.DeleteDocumentAsync(Id, index: indexName);
+
+        this.Output.WriteLine("Deleting index");
+        await this.KernelMemory.DeleteIndexAsync(indexName);
+    }
+
+    [Fact]
+    [Trait("Category", "Elasticsearch")]
     [SuppressMessage("Reliability", "CA2007:Consider calling ConfigureAwait on the awaited task", Justification = "<Pending>")]
     public async Task ItSupportsMultipleFiltersAsync()
     {
