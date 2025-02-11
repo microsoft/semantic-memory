@@ -29,6 +29,8 @@ public sealed class PostgresMemory : IMemoryDb, IDisposable, IAsyncDisposable
     private readonly ITextEmbeddingGenerator _embeddingGenerator;
     private readonly ILogger<PostgresMemory> _log;
 
+    private readonly bool _useHybridSearch;
+
     /// <summary>
     /// Create a new instance of Postgres KM connector
     /// </summary>
@@ -41,6 +43,7 @@ public sealed class PostgresMemory : IMemoryDb, IDisposable, IAsyncDisposable
         ILoggerFactory? loggerFactory = null)
     {
         this._log = (loggerFactory ?? DefaultLogger.Factory).CreateLogger<PostgresMemory>();
+        this._useHybridSearch = config.UseHybridSearch;
 
         this._embeddingGenerator = embeddingGenerator;
         if (this._embeddingGenerator == null)
@@ -160,12 +163,14 @@ public sealed class PostgresMemory : IMemoryDb, IDisposable, IAsyncDisposable
 
         var records = this._db.GetSimilarAsync(
             index,
+            query: text,
             target: new Vector(textEmbedding.Data),
             minSimilarity: minRelevance,
             filterSql: sql,
             sqlUserValues: unsafeSqlUserValues,
             limit: limit,
             withEmbeddings: withEmbeddings,
+            useHybridSearch: this._useHybridSearch,
             cancellationToken: cancellationToken).ConfigureAwait(false);
 
         await foreach ((PostgresMemoryRecord record, double similarity) result in records)

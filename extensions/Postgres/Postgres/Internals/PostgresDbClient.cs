@@ -42,6 +42,8 @@ internal sealed class PostgresDbClient : IDisposable, IAsyncDisposable
         this._dbNamePresent = config.ConnectionString.Contains("Database=", StringComparison.OrdinalIgnoreCase);
         this._schema = config.Schema;
         this._tableNamePrefix = config.TableNamePrefix;
+        this._textSearchLanguage = config.TextSearchLanguage;
+        this._rrf_K = config.RRFK;
 
         this._colId = config.Columns[PostgresConfig.ColumnId];
         this._colEmbedding = config.Columns[PostgresConfig.ColumnEmbedding];
@@ -59,6 +61,14 @@ internal sealed class PostgresDbClient : IDisposable, IAsyncDisposable
 
         this._columnsListNoEmbeddings = $"{this._colId},{this._colTags},{this._colContent},{this._colPayload}";
         this._columnsListWithEmbeddings = $"{this._colId},{this._colTags},{this._colContent},{this._colPayload},{this._colEmbedding}";
+        this._columnsListHybrid = $"{this._colId},{this._colTags},{this._colContent},{this._colPayload},{this._colEmbedding}";
+        this._columnsListHybridCoalesce = $@"
+                                            COALESCE(semantic_search.{this._colId}, keyword_search.{this._colId}) AS {this._colId},
+                                            COALESCE(semantic_search.{this._colTags}, keyword_search.{this._colTags}) AS {this._colTags},
+                                            COALESCE(semantic_search.{this._colContent}, keyword_search.{this._colContent}) AS {this._colContent},
+                                            COALESCE(semantic_search.{this._colPayload}, keyword_search.{this._colPayload}) AS {this._colPayload},
+                                            COALESCE(semantic_search.{this._colEmbedding}, keyword_search.{this._colEmbedding}) AS {this._colEmbedding}
+                                         ";
 
         this._createTableSql = string.Empty;
         if (config.CreateTableSql?.Count > 0)
@@ -138,6 +148,8 @@ internal sealed class PostgresDbClient : IDisposable, IAsyncDisposable
         CancellationToken cancellationToken = default)
     {
         var origInputTableName = tableName;
+        var indexTags = this.WithTableNamePrefix(tableName) + "_idx_tags";
+        var indexContent = this.WithTableNamePrefix(tableName) + "_idx_content";
         tableName = this.WithSchemaAndTableNamePrefix(tableName);
         this._log.LogTrace("Creating table: {0}", tableName);
 
@@ -175,7 +187,8 @@ internal sealed class PostgresDbClient : IDisposable, IAsyncDisposable
                                 {this._colContent}   TEXT DEFAULT '' NOT NULL,
                                 {this._colPayload}   JSONB DEFAULT '{{}}'::JSONB NOT NULL
                             );
-                            CREATE INDEX IF NOT EXISTS idx_tags ON {tableName} USING GIN({this._colTags});
+                            CREATE INDEX IF NOT EXISTS ""{indexTags}"" ON {tableName} USING GIN({this._colTags});
+                            CREATE INDEX IF NOT EXISTS ""{indexContent}"" ON {tableName} USING GIN(to_tsvector('{this._textSearchLanguage}',{this._colContent}));
                             COMMIT;
                         ";
 #pragma warning restore CA2100
@@ -388,6 +401,7 @@ internal sealed class PostgresDbClient : IDisposable, IAsyncDisposable
     /// Get a list of records
     /// </summary>
     /// <param name="tableName">Table containing the records to fetch</param>
+    /// <param name="query">Prompt query. Only used in the case of hybrid search</param>
     /// <param name="target">Source vector to compare for similarity</param>
     /// <param name="minSimilarity">Minimum similarity threshold</param>
     /// <param name="filterSql">SQL filter to apply</param>
@@ -395,9 +409,11 @@ internal sealed class PostgresDbClient : IDisposable, IAsyncDisposable
     /// <param name="limit">Max number of records to retrieve</param>
     /// <param name="offset">Records to skip from the top</param>
     /// <param name="withEmbeddings">Whether to include embedding vectors</param>
+    /// <param name="useHybridSearch">Whether to use hybrid search or vector search</param>
     /// <param name="cancellationToken">Async task cancellation token</param>
     public async IAsyncEnumerable<(PostgresMemoryRecord record, double similarity)> GetSimilarAsync(
         string tableName,
+        string query,
         Vector target,
         double minSimilarity,
         string? filterSql = null,
@@ -405,6 +421,7 @@ internal sealed class PostgresDbClient : IDisposable, IAsyncDisposable
         int limit = 1,
         int offset = 0,
         bool withEmbeddings = false,
+        bool useHybridSearch = false,
         [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
         tableName = this.WithSchemaAndTableNamePrefix(tableName);
@@ -414,12 +431,16 @@ internal sealed class PostgresDbClient : IDisposable, IAsyncDisposable
         // Column names
         string columns = withEmbeddings ? this._columnsListWithEmbeddings : this._columnsListNoEmbeddings;
 
+
         // Filtering logic, including filter by similarity
+        //
         filterSql = filterSql?.Trim().Replace(PostgresSchema.PlaceholdersTags, this._colTags, StringComparison.Ordinal);
         if (string.IsNullOrWhiteSpace(filterSql))
         {
             filterSql = "TRUE";
         }
+
+        string filterSqlHybridText = filterSql;
 
         var maxDistance = 1 - minSimilarity;
         filterSql += $" AND {this._colEmbedding} <=> @embedding < @maxDistance";
@@ -440,16 +461,51 @@ internal sealed class PostgresDbClient : IDisposable, IAsyncDisposable
 #pragma warning disable CA2100 // SQL reviewed
                     string colDistance = "__distance";
 
-                    // When using 1 - (embedding <=> target) the index is not being used, therefore we calculate
-                    // the similarity (1 - distance) later. Furthermore, colDistance can't be used in the WHERE clause.
-                    cmd.CommandText = @$"
-                        SELECT {columns}, {this._colEmbedding} <=> @embedding AS {colDistance}
-                        FROM {tableName}
-                        WHERE {filterSql}
-                        ORDER BY {colDistance} ASC
+                    if (useHybridSearch)
+                    {
+                        // When using 1 - (embedding <=> target) the index is not being used, therefore we calculate
+                        // the similarity (1 - distance) later. Furthermore, colDistance can't be used in the WHERE clause.
+                        cmd.CommandText = @$"
+                        WITH semantic_search AS (
+                            SELECT {this._columnsListHybrid}, RANK () OVER (ORDER BY {this._colEmbedding} <=> @embedding) AS rank
+                            FROM {tableName}
+                            WHERE {filterSql}
+                            ORDER BY {this._colEmbedding} <=> @embedding
+                            LIMIT @limit
+                        ),
+                        keyword_search AS (
+                            SELECT {this._columnsListHybrid}, RANK () OVER (ORDER BY ts_rank_cd(to_tsvector('english', {this._colContent}), query) DESC)
+                            FROM {tableName}, plainto_tsquery('english', @query) query
+                            WHERE  {filterSqlHybridText} AND to_tsvector('english', {this._colContent}) @@ query
+                            ORDER BY ts_rank_cd(to_tsvector('english', {this._colContent}), query) DESC
+                            LIMIT @limit
+                        )
+                        SELECT
+                            {this._columnsListHybridCoalesce},
+                            COALESCE(1.0 / ({this._rrf_K} + semantic_search.rank), 0.0) +
+                            COALESCE(1.0 / ({this._rrf_K} + keyword_search.rank), 0.0) AS {colDistance}
+                        FROM semantic_search
+                        FULL OUTER JOIN keyword_search ON semantic_search.{this._colId} = keyword_search.{this._colId}
+                        ORDER BY {colDistance} DESC
                         LIMIT @limit
                         OFFSET @offset
                     ";
+                        cmd.Parameters.AddWithValue("@query", query);
+                        cmd.Parameters.AddWithValue("@minSimilarity", minSimilarity);
+                    }
+                    else
+                    {
+                        // When using 1 - (embedding <=> target) the index is not being used, therefore we calculate
+                        // the similarity (1 - distance) later. Furthermore, colDistance can't be used in the WHERE clause.
+                        cmd.CommandText = @$"
+                            SELECT {columns}, {this._colEmbedding} <=> @embedding AS {colDistance}
+                            FROM {tableName}
+                            WHERE {filterSql}
+                            ORDER BY {colDistance} ASC
+                            LIMIT @limit
+                            OFFSET @offset
+                        ";
+                    }
 
                     cmd.Parameters.AddWithValue("@embedding", target);
                     cmd.Parameters.AddWithValue("@maxDistance", maxDistance);
@@ -692,7 +748,11 @@ internal sealed class PostgresDbClient : IDisposable, IAsyncDisposable
     private readonly string _colPayload;
     private readonly string _columnsListNoEmbeddings;
     private readonly string _columnsListWithEmbeddings;
+    private readonly string _columnsListHybrid;
+    private readonly string _columnsListHybridCoalesce;
     private readonly bool _dbNamePresent;
+    private readonly string _textSearchLanguage;
+    private readonly int _rrf_K;
 
     /// <summary>
     /// Try to connect to PG, handling exceptions in case the DB doesn't exist

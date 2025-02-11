@@ -108,6 +108,24 @@ public class PostgresConfig
     public List<string> CreateTableSql { get; set; } = [];
 
     /// <summary>
+    /// Important: when using hybrid search, relevance scores
+    /// are very different from when using just vector search.
+    /// </summary>
+    public bool UseHybridSearch { get; set; } = false;
+
+    /// <summary>
+    /// Defines the dictionary language used for the textual part of hybrid search.
+    /// see: https://www.postgresql.org/docs/current/textsearch-dictionaries.html
+    /// This query can help you to get the list of dictionaries: SELECT * FROM pg_catalog.pg_ts_dict;
+    /// </summary>
+    public string TextSearchLanguage { get; set; } = "english";
+
+    /// <summary>
+    /// Reciprocal Ranked Fusion to score results of Hybrid Search
+    /// </summary>
+    public int RRFK { get; set; } = 50;
+
+    /// <summary>
     /// Create a new instance of the configuration
     /// </summary>
     public PostgresConfig()
