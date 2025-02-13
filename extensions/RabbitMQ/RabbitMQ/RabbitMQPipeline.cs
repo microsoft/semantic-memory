@@ -17,13 +17,20 @@ using RabbitMQ.Client.Exceptions;
 namespace Microsoft.KernelMemory.Orchestration.RabbitMQ;
 
 [Experimental("KMEXP04")]
-public sealed class RabbitMQPipeline : IQueue
+public sealed class RabbitMQPipeline : IQueue, IAsyncDisposable
 {
     private readonly ILogger<RabbitMQPipeline> _log;
-    private readonly IConnection _connection;
-    private readonly IModel _channel;
-    private readonly AsyncEventingBasicConsumer _consumer;
+
+    private readonly ConnectionFactory _factory;
     private readonly RabbitMQConfig _config;
+
+    private IConnection? _connection;
+    private IChannel? _channel;
+    private AsyncEventingBasicConsumer? _consumer;
+
+    // The action that will be executed when a new message is received.
+    private Func<string, Task<ReturnType>>? _processMessageAction;
+
     private readonly int _messageTTLMsecs;
     private readonly int _delayBeforeRetryingMsecs;
     private readonly int _maxAttempts;
@@ -40,8 +47,7 @@ public sealed class RabbitMQPipeline : IQueue
         this._config = config;
         this._config.Validate(this._log);
 
-        // see https://www.rabbitmq.com/dotnet-api-guide.html#consuming-async
-        var factory = new ConnectionFactory
+        this._factory = new ConnectionFactory
         {
             ClientProvidedName = "KernelMemory",
             HostName = config.Host,
@@ -49,7 +55,6 @@ public sealed class RabbitMQPipeline : IQueue
             UserName = config.Username,
             Password = config.Password,
             VirtualHost = !string.IsNullOrWhiteSpace(config.VirtualHost) ? config.VirtualHost : "/",
-            DispatchConsumersAsync = true,
             ConsumerDispatchConcurrency = config.ConcurrentThreads,
             Ssl = new SslOption
             {
@@ -59,10 +64,6 @@ public sealed class RabbitMQPipeline : IQueue
         };
 
         this._messageTTLMsecs = config.MessageTTLSecs * 1000;
-        this._connection = factory.CreateConnection();
-        this._channel = this._connection.CreateModel();
-        this._channel.BasicQos(prefetchSize: 0, prefetchCount: config.PrefetchCount, global: false);
-        this._consumer = new AsyncEventingBasicConsumer(this._channel);
 
         this._delayBeforeRetryingMsecs = Math.Max(0, this._config.DelayBeforeRetryingMsecs);
         this._maxAttempts = Math.Max(0, this._config.MaxRetriesBeforePoisonQueue) + 1;
@@ -70,10 +71,12 @@ public sealed class RabbitMQPipeline : IQueue
 
     /// <inheritdoc />
     /// About poison queue and dead letters, see https://www.rabbitmq.com/docs/dlx
-    public Task<IQueue> ConnectToQueueAsync(string queueName, QueueOptions options = default, CancellationToken cancellationToken = default)
+    public async Task<IQueue> ConnectToQueueAsync(string queueName, QueueOptions options = default, CancellationToken cancellationToken = default)
     {
         ArgumentNullExceptionEx.ThrowIfNullOrWhiteSpace(queueName, nameof(queueName), "The queue name is empty");
         ArgumentExceptionEx.ThrowIf(queueName.StartsWith("amq.", StringComparison.OrdinalIgnoreCase), nameof(queueName), "The queue name cannot start with 'amq.'");
+
+        await this.InitializeAsync().ConfigureAwait(false);
 
         var poisonExchangeName = $"{queueName}.dlx";
         var poisonQueueName = $"{queueName}{this._config.PoisonQueueSuffix}";
@@ -94,17 +97,13 @@ public sealed class RabbitMQPipeline : IQueue
         this._queueName = queueName;
         try
         {
-            this._channel.QueueDeclare(
-                queue: this._queueName,
-                durable: true,
-                exclusive: false,
-                autoDelete: false,
-                arguments: new Dictionary<string, object>
-                {
-                    ["x-queue-type"] = "quorum",
-                    ["x-delivery-limit"] = this._config.MaxRetriesBeforePoisonQueue,
-                    ["x-dead-letter-exchange"] = poisonExchangeName
-                });
+            await this._channel!.QueueDeclareAsync(queue: this._queueName, durable: true, exclusive: false, autoDelete: false, arguments: new Dictionary<string, object?>
+            {
+                ["x-queue-type"] = "quorum",
+                ["x-delivery-limit"] = this._config.MaxRetriesBeforePoisonQueue,
+                ["x-dead-letter-exchange"] = poisonExchangeName
+            }, cancellationToken: cancellationToken).ConfigureAwait(false);
+
             this._log.LogTrace("Queue name: {0}", this._queueName);
         }
 #pragma warning disable CA2254
@@ -129,34 +128,35 @@ public sealed class RabbitMQPipeline : IQueue
 
         // Define poison queue where failed messages are stored
         this._poisonQueueName = poisonQueueName;
-        this._channel.QueueDeclare(
+        await this._channel.QueueDeclareAsync(
             queue: this._poisonQueueName,
             durable: true,
             exclusive: false,
             autoDelete: false,
-            arguments: null);
+            arguments: null,
+            cancellationToken: cancellationToken).ConfigureAwait(false);
 
         // Define exchange to route failed messages to poison queue
-        this._channel.ExchangeDeclare(poisonExchangeName, "fanout", durable: true, autoDelete: false);
-        this._channel.QueueBind(this._poisonQueueName, poisonExchangeName, routingKey: string.Empty, arguments: null);
+        await this._channel.ExchangeDeclareAsync(poisonExchangeName, "fanout", durable: true, autoDelete: false, cancellationToken: cancellationToken).ConfigureAwait(false);
+        await this._channel.QueueBindAsync(this._poisonQueueName, poisonExchangeName, routingKey: string.Empty, arguments: null, cancellationToken: cancellationToken).ConfigureAwait(false);
         this._log.LogTrace("Poison queue name '{0}' bound to exchange '{1}' for queue '{2}'", this._poisonQueueName, poisonExchangeName, this._queueName);
 
         // Activate consumer
         if (options.DequeueEnabled)
         {
-            this._channel.BasicConsume(queue: this._queueName, autoAck: false, consumer: this._consumer);
+            await this._channel.BasicConsumeAsync(queue: this._queueName, autoAck: false, consumer: this._consumer!, cancellationToken: cancellationToken).ConfigureAwait(false);
             this._log.LogTrace("Enabling dequeue on queue `{0}`", this._queueName);
         }
 
-        return Task.FromResult<IQueue>(this);
+        return this;
     }
 
     /// <inheritdoc />
-    public Task EnqueueAsync(string message, CancellationToken cancellationToken = default)
+    public async Task EnqueueAsync(string message, CancellationToken cancellationToken = default)
     {
         if (cancellationToken.IsCancellationRequested)
         {
-            return Task.FromCanceled(cancellationToken);
+            return;
         }
 
         if (string.IsNullOrEmpty(this._queueName))
@@ -164,25 +164,58 @@ public sealed class RabbitMQPipeline : IQueue
             throw new InvalidOperationException("The client must be connected to a queue first");
         }
 
-        this.PublishMessage(
+        await this.PublishMessageAsync(
             queueName: this._queueName,
             body: Encoding.UTF8.GetBytes(message),
             messageId: Guid.NewGuid().ToString("N"),
-            expirationMsecs: this._messageTTLMsecs);
-
-        return Task.CompletedTask;
+            expirationMsecs: this._messageTTLMsecs).ConfigureAwait(false);
     }
 
     /// <inheritdoc />
     public void OnDequeue(Func<string, Task<ReturnType>> processMessageAction)
     {
-        this._consumer.Received += async (object sender, BasicDeliverEventArgs args) =>
+        // We just store the action to be executed when a message is received.
+        // The actual message processing is registered only when the consumer is created.
+        this._processMessageAction = processMessageAction;
+    }
+
+    public void Dispose()
+    {
+        // Note: Start from v7.0, Synchronous Close methods are not available anymore in the library, so we just call Dispose.
+        ((IDisposable)this._channel!).Dispose();
+        ((IDisposable)this._connection!).Dispose();
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        await this._channel!.CloseAsync().ConfigureAwait(false);
+        await this._connection!.CloseAsync().ConfigureAwait(false);
+
+        await this._channel!.DisposeAsync().ConfigureAwait(false);
+        await this._connection!.DisposeAsync().ConfigureAwait(false);
+    }
+
+    private async Task InitializeAsync()
+    {
+        if (this._connection is not null)
+        {
+            // The client is already connected.
+            return;
+        }
+
+        this._connection = await this._factory.CreateConnectionAsync().ConfigureAwait(false);
+
+        this._channel = await this._connection.CreateChannelAsync().ConfigureAwait(false);
+        await this._channel.BasicQosAsync(prefetchSize: 0, prefetchCount: this._config.PrefetchCount, global: false).ConfigureAwait(false);
+
+        this._consumer = new AsyncEventingBasicConsumer(this._channel);
+        this._consumer.ReceivedAsync += async (object _, BasicDeliverEventArgs args) =>
         {
             // Just for logging, extract the attempt number from the message headers
             var attemptNumber = 1;
             if (args.BasicProperties?.Headers != null && args.BasicProperties.Headers.TryGetValue("x-delivery-count", out object? value))
             {
-                attemptNumber = int.TryParse(value.ToString(), out var parsedResult) ? ++parsedResult : -1;
+                attemptNumber = int.TryParse(value!.ToString(), out var parsedResult) ? ++parsedResult : -1;
             }
 
             try
@@ -193,12 +226,13 @@ public sealed class RabbitMQPipeline : IQueue
                 byte[] body = args.Body.ToArray();
                 string message = Encoding.UTF8.GetString(body);
 
-                var returnType = await processMessageAction.Invoke(message).ConfigureAwait(false);
+                // Invokes the action that has been stored in the OnDequeue method.
+                var returnType = await this._processMessageAction!.Invoke(message).ConfigureAwait(false);
                 switch (returnType)
                 {
                     case ReturnType.Success:
                         this._log.LogTrace("Message '{0}' successfully processed, deleting message", args.BasicProperties?.MessageId);
-                        this._channel.BasicAck(args.DeliveryTag, multiple: false);
+                        await this._channel.BasicAckAsync(args.DeliveryTag, multiple: false, cancellationToken: args.CancellationToken).ConfigureAwait(false);
                         break;
 
                     case ReturnType.TransientError:
@@ -217,12 +251,12 @@ public sealed class RabbitMQPipeline : IQueue
                                 args.BasicProperties?.MessageId, attemptNumber, this._maxAttempts);
                         }
 
-                        this._channel.BasicNack(args.DeliveryTag, multiple: false, requeue: true);
+                        await this._channel.BasicNackAsync(args.DeliveryTag, multiple: false, requeue: true, cancellationToken: args.CancellationToken).ConfigureAwait(false);
                         break;
 
                     case ReturnType.FatalError:
                         this._log.LogError("Message '{0}' failed to process due to a non-recoverable error, moving to poison queue", args.BasicProperties?.MessageId);
-                        this._channel.BasicNack(args.DeliveryTag, multiple: false, requeue: false);
+                        await this._channel.BasicNackAsync(args.DeliveryTag, multiple: false, requeue: false, cancellationToken: args.CancellationToken).ConfigureAwait(false);
                         break;
 
                     default:
@@ -232,7 +266,7 @@ public sealed class RabbitMQPipeline : IQueue
             catch (KernelMemoryException e) when (e.IsTransient.HasValue && !e.IsTransient.Value)
             {
                 this._log.LogError(e, "Message '{0}' failed to process due to a non-recoverable error, moving to poison queue", args.BasicProperties?.MessageId);
-                this._channel.BasicNack(args.DeliveryTag, multiple: false, requeue: false);
+                await this._channel.BasicNackAsync(args.DeliveryTag, multiple: false, requeue: false, cancellationToken: args.CancellationToken).ConfigureAwait(false);
             }
 #pragma warning disable CA1031 // Must catch all to handle queue properly
             catch (Exception e)
@@ -258,28 +292,19 @@ public sealed class RabbitMQPipeline : IQueue
                 }
 
                 // TODO: verify and document what happens if this fails. RabbitMQ should automatically unlock messages.
-                this._channel.BasicNack(args.DeliveryTag, multiple: false, requeue: true);
+                await this._channel.BasicNackAsync(args.DeliveryTag, multiple: false, requeue: true, cancellationToken: args.CancellationToken).ConfigureAwait(false);
             }
 #pragma warning restore CA1031
         };
     }
 
-    public void Dispose()
-    {
-        this._channel.Close();
-        this._connection.Close();
-
-        this._channel.Dispose();
-        this._connection.Dispose();
-    }
-
-    private void PublishMessage(
+    private async Task PublishMessageAsync(
         string queueName,
         ReadOnlyMemory<byte> body,
         string messageId,
         int? expirationMsecs)
     {
-        var properties = this._channel.CreateBasicProperties();
+        var properties = new BasicProperties();
         properties.Persistent = true;
         properties.MessageId = messageId;
 
@@ -291,11 +316,12 @@ public sealed class RabbitMQPipeline : IQueue
         this._log.LogDebug("Sending message to {0}: {1} (TTL: {2} secs)...",
             queueName, properties.MessageId, expirationMsecs.HasValue ? expirationMsecs / 1000 : "infinite");
 
-        this._channel.BasicPublish(
+        await this._channel!.BasicPublishAsync(
             routingKey: queueName,
             body: body,
             exchange: string.Empty,
-            basicProperties: properties);
+            basicProperties: properties,
+            mandatory: true).ConfigureAwait(false);
 
         this._log.LogDebug("Message sent: {0} (TTL: {1} secs)", properties.MessageId, expirationMsecs.HasValue ? expirationMsecs / 1000 : "infinite");
     }

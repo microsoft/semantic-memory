@@ -44,7 +44,7 @@ internal static class Program
 
         await pipeline.ConnectToQueueAsync(QueueName, QueueOptions.PubSub);
 
-        ListenToDeadLetterQueue(rabbitMQConfig);
+        await ListenToDeadLetterQueueAsync(rabbitMQConfig);
 
         // Change ConcurrentThreads and PrefetchCount to 1 to see
         // how they affect total execution time
@@ -59,7 +59,7 @@ internal static class Program
         }
     }
 
-    private static void ListenToDeadLetterQueue(RabbitMQConfig config)
+    private static async Task ListenToDeadLetterQueueAsync(RabbitMQConfig config)
     {
         var factory = new ConnectionFactory
         {
@@ -68,7 +68,6 @@ internal static class Program
             UserName = config.Username,
             Password = config.Password,
             VirtualHost = !string.IsNullOrWhiteSpace(config.VirtualHost) ? config.VirtualHost : "/",
-            DispatchConsumersAsync = true,
             Ssl = new SslOption
             {
                 Enabled = config.SslEnabled,
@@ -76,11 +75,11 @@ internal static class Program
             }
         };
 
-        var connection = factory.CreateConnection();
-        var channel = connection.CreateModel();
+        var connection = await factory.CreateConnectionAsync();
+        var channel = await connection.CreateChannelAsync();
         var consumer = new AsyncEventingBasicConsumer(channel);
 
-        consumer.Received += async (object sender, BasicDeliverEventArgs args) =>
+        consumer.ReceivedAsync += async (object _, BasicDeliverEventArgs args) =>
         {
             byte[] body = args.Body.ToArray();
             string message = Encoding.UTF8.GetString(body);
@@ -89,7 +88,7 @@ internal static class Program
             await Task.Delay(0);
         };
 
-        channel.BasicConsume(queue: $"{QueueName}{config.PoisonQueueSuffix}",
+        await channel.BasicConsumeAsync(queue: $"{QueueName}{config.PoisonQueueSuffix}",
             autoAck: true,
             consumer: consumer);
     }
